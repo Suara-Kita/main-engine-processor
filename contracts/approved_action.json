@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ApprovedAction",
+  "description": "Approved action payload pushed to queue:approved_actions by the main triage engine after human approval",
+  "type": "object",
+  "required": [
+    "action_metadata",
+    "processed_payload",
+    "routing_target"
+  ],
+  "properties": {
+    "action_metadata": {
+      "type": "object",
+      "description": "Tracking and linking metadata",
+      "required": ["action_id", "approved_at", "original_ingestion_id"],
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "UUIDv4 generated at approval time"
+        },
+        "approved_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UTC ISO 8601 timestamp of approval"
+        },
+        "original_ingestion_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Links back to the original voter_input.ingestion_id"
+        }
+      }
+    },
+    "processed_payload": {
+      "type": "object",
+      "description": "AI-enriched classification and summary",
+      "required": ["intent_type", "category", "cleaned_summary", "urgency"],
+      "properties": {
+        "intent_type": {
+          "type": "string",
+          "enum": ["local_issue", "policy_agenda"],
+          "description": "Whether this is a specific local problem or a general policy stance"
+        },
+        "category": {
+          "type": "string",
+          "description": "Issue category (e.g. infrastructure, education, healthcare)"
+        },
+        "cleaned_summary": {
+          "type": "string",
+          "description": "Normalized, slang-cleaned summary in standard language"
+        },
+        "urgency": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Urgency level determined by the main engine"
+        }
+      }
+    },
+    "routing_target": {
+      "type": "object",
+      "description": "Dispatch routing instructions",
+      "required": ["channel", "client_identifier"],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": ["whatsapp", "telegram", "facebook", "field_ops"],
+          "description": "Target channel for dispatch"
+        },
+        "client_identifier": {
+          "type": "string",
+          "description": "Recipient identifier on the target channel"
+        }
+      }
+    }
+  }
+}
