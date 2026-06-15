@@ -58,6 +58,11 @@ impl PostgresClient {
     ) -> Result<Uuid> {
         let status = "pending";
 
+        let response_id: Option<String> = match input.pipeline_metadata.source_channel.as_str() {
+            "telegram" => input.source_profile.client_identifier.strip_prefix("tg_").map(|s| s.to_string()),
+            _ => None,
+        };
+
         let row: (Uuid,) = sqlx::query_as(
             r#"
             INSERT INTO interactions
@@ -66,8 +71,9 @@ impl PostgresClient {
                  intent_type, scope, primary_category, sub_categories,
                  cleaned_summary, urgency, voter_sentiment,
                  inferred_location_tags, rejection_reason, raw_language, status,
+                 response_id,
                  ingested_at, processed_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
             ON CONFLICT (ingestion_id) DO NOTHING
             RETURNING id
             "#,
@@ -90,6 +96,7 @@ impl PostgresClient {
         .bind(&analysis.rejection_reason)
         .bind(&analysis.detected_language)
         .bind(status)
+        .bind(response_id)
         .bind(input.pipeline_metadata.ingested_at)
         .fetch_one(&self.pool)
         .await?;
@@ -134,6 +141,35 @@ impl PostgresClient {
             "#,
         )
         .bind(ingestion_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_dispatched(&self, ingestion_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE interactions
+            SET status = 'dispatched', dispatched_at = NOW()
+            WHERE ingestion_id = $1
+            "#,
+        )
+        .bind(ingestion_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_dispatch_error(&self, ingestion_id: Uuid, error: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE interactions
+            SET status = 'dispatch_error', dispatch_error = $2
+            WHERE ingestion_id = $1
+            "#,
+        )
+        .bind(ingestion_id)
+        .bind(error)
         .execute(&self.pool)
         .await?;
         Ok(())

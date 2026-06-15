@@ -35,11 +35,14 @@ CREATE TABLE IF NOT EXISTS interactions (
     rejection_reason TEXT,
     raw_language TEXT NOT NULL DEFAULT 'other'
         CHECK (raw_language IN ('malay', 'english', 'tamil', 'mandarin', 'other')),
+    response_id VARCHAR,
+    dispatch_error TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'approved', 'rejected', 'noise')),
+        CHECK (status IN ('pending', 'approved', 'rejected', 'noise', 'dispatched', 'dispatch_error')),
     ingested_at TIMESTAMPTZ NOT NULL,
     processed_at TIMESTAMPTZ,
     approved_at TIMESTAMPTZ,
+    dispatched_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

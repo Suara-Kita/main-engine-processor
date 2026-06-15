@@ -13,6 +13,7 @@ pub struct Config {
     pub llm_api_key: String,
     pub queue_voter_inputs: String,
     pub queue_approved_actions: String,
+    pub queue_dispatched: String,
 }
 
 impl Config {
@@ -45,6 +46,7 @@ impl Config {
             llm_api_key: env("LLM_API_KEY", ""),
             queue_voter_inputs: env("QUEUE_VOTER_INPUTS", "queue:voter_inputs"),
             queue_approved_actions: env("QUEUE_APPROVED_ACTIONS", "queue:approved_actions"),
+            queue_dispatched: env("QUEUE_DISPATCHED", "queue:dispatched"),
         })
     }
 }
@@ -64,6 +66,7 @@ mod tests {
         assert_eq!(cfg.worker_count, 4);
         assert_eq!(cfg.queue_voter_inputs, "queue:voter_inputs");
         assert_eq!(cfg.queue_approved_actions, "queue:approved_actions");
+        assert_eq!(cfg.queue_dispatched, "queue:dispatched");
     }
 
     #[test]
