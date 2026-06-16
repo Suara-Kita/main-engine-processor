@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS interactions (
     rejection_reason TEXT,
     raw_language TEXT NOT NULL DEFAULT 'other'
         CHECK (raw_language IN ('malay', 'english', 'tamil', 'mandarin', 'other')),
+    constituency TEXT,
     response_id VARCHAR,
     dispatch_error TEXT,
     status TEXT NOT NULL DEFAULT 'pending'

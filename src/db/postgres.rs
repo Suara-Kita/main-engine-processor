@@ -71,9 +71,9 @@ impl PostgresClient {
                  intent_type, scope, primary_category, sub_categories,
                  cleaned_summary, urgency, voter_sentiment,
                  inferred_location_tags, rejection_reason, raw_language, status,
-                 response_id,
+                 response_id, constituency,
                  ingested_at, processed_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW())
             ON CONFLICT (ingestion_id) DO NOTHING
             RETURNING id
             "#,
@@ -97,6 +97,7 @@ impl PostgresClient {
         .bind(&analysis.detected_language)
         .bind(status)
         .bind(response_id)
+        .bind(&input.source_profile.inferred_constituency)
         .bind(input.pipeline_metadata.ingested_at)
         .fetch_one(&self.pool)
         .await?;
@@ -111,8 +112,8 @@ impl PostgresClient {
                 (ingestion_id, source_channel, raw_text, content_type,
                  media_attachments, context_anchor,
                  intent_type, cleaned_summary, rejection_reason, raw_language, status,
-                 ingested_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'noise', $11)
+                 constituency, ingested_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'noise', $11, $12)
             ON CONFLICT (ingestion_id) DO NOTHING
             "#,
         )
@@ -126,6 +127,7 @@ impl PostgresClient {
         .bind(&analysis.cleaned_summary)
         .bind(&analysis.rejection_reason)
         .bind(&analysis.detected_language)
+        .bind(&input.source_profile.inferred_constituency)
         .bind(input.pipeline_metadata.ingested_at)
         .execute(&self.pool)
         .await?;
