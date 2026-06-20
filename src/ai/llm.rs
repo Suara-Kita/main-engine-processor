@@ -105,6 +105,17 @@ fn missing_required_fields(v: &serde_json::Value) -> Vec<String> {
     missing
 }
 
+fn detect_input_language(text: &str) -> &str {
+    for c in text.chars() {
+        match c {
+            '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' => return "mandarin",
+            '\u{0B80}'..='\u{0BFF}' => return "tamil",
+            _ => {}
+        }
+    }
+    "other"
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct LlmRequest {
     model: String,
@@ -145,6 +156,9 @@ pub struct LlmClient {
     endpoint: String,
     model: String,
     api_key: String,
+    fallback_endpoint: String,
+    fallback_model: String,
+    fallback_api_key: String,
 }
 
 const SYSTEM_PROMPT: &str = r#"You are a political issue analyzer for a Malaysian constituency management system. Analyze the voter's message and return a JSON object with the following fields:
@@ -157,7 +171,7 @@ const SYSTEM_PROMPT: &str = r#"You are a political issue analyzer for a Malaysia
 
 4. scope (enum: "local" | "state" | "national") — The impact level of the issue.
 
-5. cleaned_summary (string) — A clean 1-sentence objective summary. Fix typos, expand slang, normalize dialect. Write in formal Bahasa Melayu. This is what humans read first.
+5. cleaned_summary (string) — A clean 1-sentence objective summary. Fix typos, expand slang, normalize dialect. MUST be written in formal Bahasa Melayu (Malay). Translate the summary content to Malay even if the voter wrote in another language — this field is always Malay. This is what humans read first.
 
 6. primary_category (enum: "infrastructure" | "economy_and_labor" | "welfare_and_aid" | "education" | "healthcare" | "religion_and_community") — The primary pillar this issue falls under.
 
@@ -171,19 +185,40 @@ const SYSTEM_PROMPT: &str = r#"You are a political issue analyzer for a Malaysia
 
 11. detected_language (string) — The language of the voter's message. Must be exactly one of: "malay", "english", "tamil", "mandarin", "other". Use "malay" for Bahasa Malaysia, "english" for English, "tamil" for Tamil, "mandarin" for Mandarin Chinese, "other" for any other language.
 
-Respond ONLY with valid JSON. Do not include markdown, code blocks, or any text outside the JSON object."#;
+Respond ONLY with valid JSON. Do not include markdown, code blocks, or any text outside the JSON object.
+
+CRITICAL: The "cleaned_summary" field MUST always be in formal Bahasa Melayu (Malay), regardless of the voter's language. Translate to Malay if needed. This is a hard requirement."#;
+
+const SUMMARY_TRANSLATE_PROMPT: &str = "Translate the following text to formal Bahasa Melayu (Malay). Return ONLY the translated text, no explanation, no quotes, no prefixes.";
 
 impl LlmClient {
-    pub fn new(endpoint: &str, model: &str, api_key: &str) -> Self {
+    pub fn new(endpoint: &str, model: &str, api_key: &str, fallback_endpoint: &str, fallback_model: &str, fallback_api_key: &str) -> Self {
         Self {
             client: reqwest::Client::new(),
             endpoint: endpoint.to_string(),
             model: model.to_string(),
             api_key: api_key.to_string(),
+            fallback_endpoint: if fallback_endpoint.is_empty() {
+                endpoint.to_string()
+            } else {
+                fallback_endpoint.to_string()
+            },
+            fallback_model: fallback_model.to_string(),
+            fallback_api_key: if fallback_api_key.is_empty() {
+                api_key.to_string()
+            } else {
+                fallback_api_key.to_string()
+            },
         }
     }
 
     pub async fn analyze(&self, raw_text: &str, context: &Option<String>) -> anyhow::Result<LlmAnalysis> {
+        let lang = detect_input_language(raw_text);
+        let (active_endpoint, active_model, active_api_key) = match lang {
+            "mandarin" | "tamil" => (&self.fallback_endpoint, &self.fallback_model, &self.fallback_api_key),
+            _ => (&self.endpoint, &self.model, &self.api_key),
+        };
+
         let user_message = match context {
             Some(ctx) => format!("Parent context:\n{}\n\nVoter message:\n{}", ctx, raw_text),
             None => format!("Voter message:\n{}", raw_text),
@@ -201,9 +236,9 @@ impl LlmClient {
         ];
 
         for attempt in 0..3 {
-            info!(attempt, "LLM analyze attempt");
+            info!(lang, model = %active_model, attempt, "LLM analyze attempt");
 
-            let content = match self.call_llm_raw(&messages).await {
+            let content = match self.call_llm_raw(active_endpoint, active_model, active_api_key, &messages).await {
                 Ok(c) => c,
                 Err(e) => {
                     warn!(attempt, error = %e, "LLM request failed");
@@ -251,7 +286,11 @@ impl LlmClient {
                 error!(attempt, missing = ?missing, "LLM still missing fields after 3 attempts, using defaults");
             }
 
-            return Ok(LlmAnalysis::from_json_value(&parsed));
+            let mut analysis = LlmAnalysis::from_json_value(&parsed);
+            if matches!(detect_input_language(&analysis.cleaned_summary), "mandarin" | "tamil") {
+                analysis.cleaned_summary = self.translate_to_malay(&analysis.cleaned_summary).await;
+            }
+            return Ok(analysis);
         }
 
         anyhow::bail!("LLM failed to produce valid analysis after 3 attempts")
@@ -288,9 +327,33 @@ impl LlmClient {
         Ok(embedding)
     }
 
-    async fn call_llm_raw(&self, messages: &[Message]) -> anyhow::Result<String> {
+    async fn translate_to_malay(&self, text: &str) -> String {
+        let lang = detect_input_language(text);
+        let (active_endpoint, active_model, active_api_key) = match lang {
+            "mandarin" | "tamil" => (&self.fallback_endpoint, &self.fallback_model, &self.fallback_api_key),
+            _ => (&self.endpoint, &self.model, &self.api_key),
+        };
+
+        let messages = vec![
+            Message { role: "system".into(), content: SUMMARY_TRANSLATE_PROMPT.into() },
+            Message { role: "user".into(), content: text.to_string() },
+        ];
+
+        match self.call_llm_raw(active_endpoint, active_model, active_api_key, &messages).await {
+            Ok(translated) => {
+                let trimmed = translated.trim().trim_matches('"').to_string();
+                if trimmed.is_empty() { text.to_string() } else { trimmed }
+            }
+            Err(e) => {
+                warn!(error = %e, "translation LLM call failed, keeping original summary");
+                text.to_string()
+            }
+        }
+    }
+
+    async fn call_llm_raw(&self, endpoint: &str, model: &str, api_key: &str, messages: &[Message]) -> anyhow::Result<String> {
         let request = LlmRequest {
-            model: self.model.clone(),
+            model: model.to_string(),
             messages: messages.to_vec(),
             response_format: ResponseFormat {
                 format_type: "json_schema".into(),
@@ -304,8 +367,8 @@ impl LlmClient {
 
         let resp = self
             .client
-            .post(format!("{}/chat/completions", self.endpoint))
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .post(format!("{}/chat/completions", endpoint))
+            .header("Authorization", format!("Bearer {}", api_key))
             .json(&request)
             .send()
             .await?;
@@ -339,7 +402,7 @@ mod tests {
             .unwrap_or_else(|_| "https://openrouter.ai/api/v1".into());
         let model = std::env::var("LLM_MODEL")
             .unwrap_or_else(|_| "openai/gpt-oss-120b".into());
-        Some(LlmClient::new(&endpoint, &model, &api_key))
+        Some(LlmClient::new(&endpoint, &model, &api_key, "", "", ""))
     }
 
     macro_rules! skip_unless_openrouter {
@@ -448,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_llm_http_error() {
-        let client = LlmClient::new("http://localhost:1", "model", "bad-key");
+        let client = LlmClient::new("http://localhost:1", "model", "bad-key", "", "", "");
         let result = client.analyze("test", &None).await;
         assert!(result.is_err());
     }
