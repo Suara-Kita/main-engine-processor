@@ -42,7 +42,8 @@ impl Pipeline {
                 reason = ?analysis.rejection_reason,
                 "non-substantive message, skipping pipeline"
             );
-            self.postgres.log_noise(&input, &analysis).await?;
+            let voter_profile_id = self.postgres.upsert_voter(&input).await?;
+            self.postgres.log_noise(&input, voter_profile_id, &analysis).await?;
             self.queues
                 .increment_counter("stats:engine:messages_rejected")
                 .await
