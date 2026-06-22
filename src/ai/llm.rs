@@ -161,7 +161,9 @@ pub struct LlmClient {
     fallback_api_key: String,
 }
 
-const SYSTEM_PROMPT: &str = r#"You are a political issue analyzer for a Malaysian constituency management system. Analyze the voter's message and return a JSON object with the following fields:
+fn build_system_prompt(categories: &[String]) -> String {
+    let cat_list = categories.join(", ");
+    format!(r#"You are a political issue analyzer for a Malaysian constituency management system. Analyze the voter's message and return a JSON object with the following fields:
 
 1. has_substantive_value (boolean) — Is this message worth showing to humans? False for pure greetings ("Hi, apa khabar"), spam, advertisements, pure insults or personal attacks without a specific identifiable real-world issue (e.g., "Bodoh la UMNO, mati je" with no concrete complaint), or fully non-actionable content. True for any specific issue, complaint, request, support/opposition statement, or policy opinion.
 
@@ -173,7 +175,7 @@ const SYSTEM_PROMPT: &str = r#"You are a political issue analyzer for a Malaysia
 
 5. cleaned_summary (string) — A clean 1-sentence objective summary. Fix typos, expand slang, normalize dialect. MUST be written in formal Bahasa Melayu (Malay). Translate the summary content to Malay even if the voter wrote in another language — this field is always Malay. This is what humans read first.
 
-6. primary_category (enum: "infrastructure" | "economy_and_labor" | "welfare_and_aid" | "education" | "healthcare" | "religion_and_community") — The primary pillar this issue falls under.
+6. primary_category (string) — The primary pillar this issue falls under. Never use "other" as the primary_category. Use an existing category from the list below if one fits, or invent a specific new snake_case category that precisely describes the issue domain. Existing categories: {cat_list}.
 
 7. sub_categories (array of strings) — 1-3 granular tags for filtering, e.g., ["potholes", "road_safety"] or ["tolls", "public_transport"].
 
@@ -187,7 +189,8 @@ const SYSTEM_PROMPT: &str = r#"You are a political issue analyzer for a Malaysia
 
 Respond ONLY with valid JSON. Do not include markdown, code blocks, or any text outside the JSON object.
 
-CRITICAL: The "cleaned_summary" field MUST always be in formal Bahasa Melayu (Malay), regardless of the voter's language. Translate to Malay if needed. This is a hard requirement."#;
+CRITICAL: The "cleaned_summary" field MUST always be in formal Bahasa Melayu (Malay), regardless of the voter's language. Translate to Malay if needed. This is a hard requirement."#)
+}
 
 const SUMMARY_TRANSLATE_PROMPT: &str = "Translate the following text to formal Bahasa Melayu (Malay). Return ONLY the translated text, no explanation, no quotes, no prefixes.";
 
@@ -212,12 +215,18 @@ impl LlmClient {
         }
     }
 
-    pub async fn analyze(&self, raw_text: &str, context: &Option<String>) -> anyhow::Result<LlmAnalysis> {
-        let lang = detect_input_language(raw_text);
-        let (active_endpoint, active_model, active_api_key) = match lang {
-            "mandarin" | "tamil" => (&self.fallback_endpoint, &self.fallback_model, &self.fallback_api_key),
-            _ => (&self.endpoint, &self.model, &self.api_key),
+    pub async fn analyze(&self, raw_text: &str, context: &Option<String>, known_categories: &[String], force_fallback: bool) -> anyhow::Result<LlmAnalysis> {
+        let (active_endpoint, active_model, active_api_key) = if force_fallback {
+            (self.fallback_endpoint.as_str(), self.fallback_model.as_str(), self.fallback_api_key.as_str())
+        } else {
+            let input_lang = detect_input_language(raw_text);
+            match input_lang {
+                "mandarin" | "tamil" => (self.fallback_endpoint.as_str(), self.fallback_model.as_str(), self.fallback_api_key.as_str()),
+                _ => (self.endpoint.as_str(), self.model.as_str(), self.api_key.as_str()),
+            }
         };
+
+        let system_prompt = build_system_prompt(known_categories);
 
         let user_message = match context {
             Some(ctx) => format!("Parent context:\n{}\n\nVoter message:\n{}", ctx, raw_text),
@@ -227,7 +236,7 @@ impl LlmClient {
         let mut messages = vec![
             Message {
                 role: "system".into(),
-                content: SYSTEM_PROMPT.into(),
+                content: system_prompt,
             },
             Message {
                 role: "user".into(),
@@ -236,7 +245,7 @@ impl LlmClient {
         ];
 
         for attempt in 0..3 {
-            info!(lang, model = %active_model, attempt, "LLM analyze attempt");
+            info!(model = %active_model, attempt, "LLM analyze attempt");
 
             let content = match self.call_llm_raw(active_endpoint, active_model, active_api_key, &messages).await {
                 Ok(c) => c,
@@ -396,6 +405,17 @@ impl LlmClient {
 mod tests {
     use super::*;
 
+    fn test_categories() -> Vec<String> {
+        vec![
+            "infrastructure".into(),
+            "economy_and_labor".into(),
+            "welfare_and_aid".into(),
+            "education".into(),
+            "healthcare".into(),
+            "religion_and_community".into(),
+        ]
+    }
+
     fn get_llm_client() -> Option<LlmClient> {
         let api_key = std::env::var("OPENROUTER_API_KEY").ok()?;
         let endpoint = std::env::var("OPENROUTER_BASE_URL")
@@ -408,7 +428,7 @@ mod tests {
     macro_rules! skip_unless_openrouter {
         () => {
             match get_llm_client() {
-                Some(c) => c,
+                Some(c) => (c, test_categories()),
                 None => return,
             }
         };
@@ -416,9 +436,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_local_infrastructure_complaint() {
-        let client = skip_unless_openrouter!();
+        let (client, cats) = skip_unless_openrouter!();
         let result = client
-            .analyze("Jalan ray dekat Tmn Mawar berlubang teruk, dah 3 bulan x dibaiki. Bahaya untuk budak sekolah.", &None)
+            .analyze("Jalan ray dekat Tmn Mawar berlubang teruk, dah 3 bulan x dibaiki. Bahaya untuk budak sekolah.", &None, &cats, false)
             .await
             .unwrap();
         assert!(result.has_substantive_value);
@@ -432,9 +452,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_policy_agenda() {
-        let client = skip_unless_openrouter!();
+        let (client, cats) = skip_unless_openrouter!();
         let result = client
-            .analyze("Kerajaan patut naikkan gaji minimum kepada RM2,500 dan buat undang-undang kerja hibrid untuk sektor awam dan swasta.", &None)
+            .analyze("Kerajaan patut naikkan gaji minimum kepada RM2,500 dan buat undang-undang kerja hibrid untuk sektor awam dan swasta.", &None, &cats, false)
             .await
             .unwrap();
         assert!(result.has_substantive_value);
@@ -446,9 +466,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_noise_greeting() {
-        let client = skip_unless_openrouter!();
+        let (client, cats) = skip_unless_openrouter!();
         let result = client
-            .analyze("Selamat pagi", &None)
+            .analyze("Selamat pagi", &None, &cats, false)
             .await
             .unwrap();
         assert!(!result.has_substantive_value);
@@ -458,11 +478,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_with_context_resolves_reply() {
-        let client = skip_unless_openrouter!();
+        let (client, cats) = skip_unless_openrouter!();
         let context = "Kerajaan negeri akan menaikkan taraf sistem longkang di Taman Mawar dengan peruntukan RM5 juta."
             .to_string();
         let result = client
-            .analyze("Setuju sangat, dah lama tunggu.", &Some(context))
+            .analyze("Setuju sangat, dah lama tunggu.", &Some(context), &cats, false)
             .await
             .unwrap();
         assert!(result.has_substantive_value);
@@ -473,9 +493,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_cleaned_summary_normalizes_slang() {
-        let client = skip_unless_openrouter!();
+        let (client, cats) = skip_unless_openrouter!();
         let result = client
-            .analyze("Jln ray kat sini berlubang gile, mntk tlong repair lmbt sgt nih", &None)
+            .analyze("Jln ray kat sini berlubang gile, mntk tlong repair lmbt sgt nih", &None, &cats, false)
             .await
             .unwrap();
         assert!(result.has_substantive_value);
@@ -486,9 +506,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_all_enum_fields_valid() {
-        let client = skip_unless_openrouter!();
+        let (client, cats) = skip_unless_openrouter!();
         let result = client
-            .analyze("Klinik kesihatan di sini kekurangan doktor, pesakit terpaksa tunggu 6 jam.", &None)
+            .analyze("Klinik kesihatan di sini kekurangan doktor, pesakit terpaksa tunggu 6 jam.", &None, &cats, false)
             .await
             .unwrap();
         assert!(result.has_substantive_value);
@@ -500,9 +520,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_empty_location_tags() {
-        let client = skip_unless_openrouter!();
+        let (client, cats) = skip_unless_openrouter!();
         let result = client
-            .analyze("Saya sokong dasar pendidikan percuma", &None)
+            .analyze("Saya sokong dasar pendidikan percuma", &None, &cats, false)
             .await
             .unwrap();
         assert!(result.has_substantive_value);
@@ -512,7 +532,7 @@ mod tests {
     #[tokio::test]
     async fn test_llm_http_error() {
         let client = LlmClient::new("http://localhost:1", "model", "bad-key", "", "", "");
-        let result = client.analyze("test", &None).await;
+        let result = client.analyze("test", &None, &test_categories(), false).await;
         assert!(result.is_err());
     }
 

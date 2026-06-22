@@ -55,6 +55,15 @@ impl QueueClient {
         Ok(conn.llen(queue).await?)
     }
 
+    pub async fn rpop<T: DeserializeOwned>(&self, queue: &str) -> Result<Option<T>> {
+        let mut conn = self.conn.clone();
+        let result: Option<String> = conn.rpop(queue, None).await?;
+        match result {
+            Some(json) => Ok(Some(serde_json::from_str(&json)?)),
+            None => Ok(None),
+        }
+    }
+
     pub async fn increment_counter(&self, key: &str) -> Result<i64> {
         let mut conn = self.conn.clone();
         Ok(conn.incr(key, 1).await?)

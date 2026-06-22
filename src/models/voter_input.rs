@@ -54,6 +54,8 @@ pub struct PipelineMetadata {
     pub source_channel: SourceChannel,
     pub ingested_at: DateTime<Utc>,
     pub trace_url: Option<String>,
+    #[serde(default)]
+    pub retry_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

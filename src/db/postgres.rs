@@ -6,6 +6,16 @@ use uuid::Uuid;
 use crate::ai::llm::LlmAnalysis;
 use crate::models::voter_input::VoterInput;
 
+const SEED_CATEGORIES: &[&str] = &[
+    "infrastructure",
+    "economy_and_labor",
+    "welfare_and_aid",
+    "education",
+    "healthcare",
+    "religion_and_community",
+    "governance_and_politics",
+];
+
 pub struct PostgresClient {
     pool: PgPool,
 }
@@ -175,5 +185,19 @@ impl PostgresClient {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn fetch_categories(&self) -> Result<Vec<String>> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT primary_category FROM interactions WHERE primary_category IS NOT NULL AND primary_category != 'other' ORDER BY primary_category",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        if rows.is_empty() {
+            Ok(SEED_CATEGORIES.iter().map(|s| s.to_string()).collect())
+        } else {
+            Ok(rows)
+        }
     }
 }

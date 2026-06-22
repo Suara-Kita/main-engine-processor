@@ -1,6 +1,7 @@
 mod ai;
 mod config;
 mod db;
+mod dlq_replay;
 mod models;
 mod pipeline;
 mod queues;
@@ -23,6 +24,14 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::from_env()?;
 
     let queues = queues::QueueClient::new(&cfg.redis_url).await?;
+
+    // Background task: replay DLQ messages back to main queue
+    {
+        let dlq_queues = queues.clone();
+        tokio::spawn(async move {
+            dlq_replay::run(dlq_queues).await;
+        });
+    }
 
     // Background task: consume queue:dispatched and update interaction status
     {
@@ -88,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
         let n4j = db::neo4j::Neo4jClient::new(&cfg.neo4j_uri, &cfg.neo4j_user, &cfg.neo4j_password).await?;
         let q = queues::QueueClient::new(&cfg.redis_url).await?;
 
-        pipelines.push(pipeline::Pipeline::new(llm, pg, pv, n4j, q, cfg.clone()));
+        pipelines.push(pipeline::Pipeline::new(llm, pg, pv, n4j, q));
     }
 
     let pool = worker::WorkerPool::new(pipelines, queues, cfg);

@@ -2,7 +2,6 @@ use anyhow::Result;
 use tracing::{error, info};
 
 use crate::ai::llm::{LlmAnalysis, LlmClient};
-use crate::config::Config;
 use crate::db::neo4j::Neo4jClient;
 use crate::db::pgvector::PgVectorClient;
 use crate::db::postgres::PostgresClient;
@@ -15,7 +14,6 @@ pub struct Pipeline {
     pgvector: PgVectorClient,
     neo4j: Neo4jClient,
     queues: QueueClient,
-    _config: Config,
 }
 
 impl Pipeline {
@@ -25,16 +23,17 @@ impl Pipeline {
         pgvector: PgVectorClient,
         neo4j: Neo4jClient,
         queues: QueueClient,
-        config: Config,
     ) -> Self {
-        Self { llm, postgres, pgvector, neo4j, queues, _config: config }
+        Self { llm, postgres, pgvector, neo4j, queues }
     }
 
     pub async fn process(&self, input: VoterInput) -> Result<ProcessedMessage> {
         let ingestion_id = input.pipeline_metadata.ingestion_id;
 
         let ctx_text = input.context_anchor.as_ref().map(|c| c.parent_raw_text.clone());
-        let analysis = self.llm.analyze(&input.content_payload.raw_text, &ctx_text).await?;
+        let known_categories = self.postgres.fetch_categories().await?;
+        let force_fallback = input.pipeline_metadata.retry_count > 0;
+        let analysis = self.llm.analyze(&input.content_payload.raw_text, &ctx_text, &known_categories, force_fallback).await?;
 
         if !analysis.has_substantive_value {
             info!(
