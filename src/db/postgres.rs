@@ -115,19 +115,20 @@ impl PostgresClient {
         Ok(row.0)
     }
 
-    pub async fn log_noise(&self, input: &VoterInput, analysis: &LlmAnalysis) -> Result<()> {
+    pub async fn log_noise(&self, input: &VoterInput, voter_profile_id: Uuid, analysis: &LlmAnalysis) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO interactions
-                (ingestion_id, source_channel, raw_text, content_type,
+                (ingestion_id, voter_profile_id, source_channel, raw_text, content_type,
                  media_attachments, context_anchor,
                  intent_type, cleaned_summary, rejection_reason, raw_language, status,
                  constituency, ingested_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'noise', $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'noise', $12, $13)
             ON CONFLICT (ingestion_id) DO NOTHING
             "#,
         )
         .bind(input.pipeline_metadata.ingestion_id)
+        .bind(voter_profile_id)
         .bind(input.pipeline_metadata.source_channel.as_str())
         .bind(&input.content_payload.raw_text)
         .bind(input.content_payload.content_type.as_str())
