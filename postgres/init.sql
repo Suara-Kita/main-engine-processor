@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS interactions (
     constituency TEXT,
     response_id VARCHAR,
     response_text TEXT,
+    marked BOOLEAN NOT NULL DEFAULT FALSE,
     dispatch_error TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'approved', 'rejected', 'noise', 'dispatched', 'dispatch_error')),

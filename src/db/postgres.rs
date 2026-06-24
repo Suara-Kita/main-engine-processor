@@ -26,6 +26,13 @@ impl PostgresClient {
             .max_connections(10)
             .connect(database_url)
             .await?;
+
+        sqlx::query(
+            "ALTER TABLE interactions ADD COLUMN IF NOT EXISTS marked BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        .execute(&pool)
+        .await?;
+
         Ok(Self { pool })
     }
 
